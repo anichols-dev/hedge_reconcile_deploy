@@ -162,20 +162,34 @@ def load_algo_performance_rd2():
     return df
 
 
-def calculate_pnl_statistics(df):
+def calculate_pnl_statistics(df, min_size=1000):
     """
     Calculate comprehensive PnL statistics.
 
     Args:
         df: DataFrame with trading data
+        min_size: Minimum Size_Matched to include in sum_returns calculation (default 1000)
 
     Returns:
         Dictionary of PnL metrics
     """
+    # Calculate sum_returns excluding trades with size < min_size
+    if 'Return_Pct' in df.columns and 'Size_Matched' in df.columns:
+        valid_size_df = df[df['Size_Matched'] >= min_size]
+        sum_returns = valid_size_df['Return_Pct'].sum()
+        sum_returns_count = len(valid_size_df)
+    elif 'Return_Pct' in df.columns:
+        sum_returns = df['Return_Pct'].sum()
+        sum_returns_count = len(df)
+    else:
+        sum_returns = 0
+        sum_returns_count = 0
+
     stats = {
         'total_trades': len(df),
         'total_pnl': df['Raw_PnL'].sum(),
-        'sum_returns': df['Return_Pct'].sum() if 'Return_Pct' in df.columns else 0,
+        'sum_returns': sum_returns,
+        'sum_returns_count': sum_returns_count,
         'avg_pnl': df['Raw_PnL'].mean(),
         'median_pnl': df['Raw_PnL'].median(),
         'std_pnl': df['Raw_PnL'].std(),
@@ -572,7 +586,7 @@ def aggregate_live_trades(live_df):
     """
     # Group by match_key and Side
     agg_df = live_df.groupby(['match_key', 'Side']).agg({
-        'Entry_Time': 'first',  # Use first entry time
+        'Entry_Time': 'first',  # Use first entry time (preserves original precision)
         'Entry_Price': lambda x: np.average(x, weights=live_df.loc[x.index, 'Size_Matched']),
         'Exit_Price': lambda x: np.average(x, weights=live_df.loc[x.index, 'Size_Matched']),
         'Exit_Time': 'last',  # Use last exit time
@@ -646,10 +660,10 @@ def calculate_deviations(matched_df):
     # Exit reason mismatch
     df['exit_reason_mismatch'] = df['Exit_Reason_live'] != df['Exit_Reason_bt']
 
-    # Fill latency (seconds between backtest timestamp and live entry)
-    df['fill_latency_seconds'] = (
-        df['Entry_Time_live'] - df['Entry_Time_bt'].dt.tz_localize(None)
-    ).dt.total_seconds()
+    # Sentiment offset: seconds into the minute when backtest sentiment occurred
+    # (Live entry times are truncated to minutes, so we measure how far into
+    # the minute the sentiment was recorded in backtest)
+    df['sentiment_offset_seconds'] = df['Entry_Time_bt'].dt.second + df['Entry_Time_bt'].dt.microsecond / 1_000_000
 
     # Absolute return deviation for sorting
     df['abs_return_deviation'] = df['return_deviation'].abs()
@@ -688,7 +702,7 @@ def get_reconciliation_summary(matched_df, live_only_df, backtest_only_df):
             'median_return_deviation': matched_df['return_deviation'].median(),
             'exit_reason_mismatch_count': matched_df['exit_reason_mismatch'].sum(),
             'exit_reason_mismatch_pct': (matched_df['exit_reason_mismatch'].sum() / len(matched_df) * 100),
-            'avg_fill_latency_seconds': matched_df['fill_latency_seconds'].mean(),
+            'avg_sentiment_offset_seconds': matched_df['sentiment_offset_seconds'].mean(),
         })
     else:
         summary.update({
@@ -698,7 +712,7 @@ def get_reconciliation_summary(matched_df, live_only_df, backtest_only_df):
             'median_return_deviation': 0,
             'exit_reason_mismatch_count': 0,
             'exit_reason_mismatch_pct': 0,
-            'avg_fill_latency_seconds': 0,
+            'avg_sentiment_offset_seconds': 0,
         })
 
     return summary

@@ -371,7 +371,8 @@ def main():
                          delta=f"{filtered_stats['total_trades']} trades")
 
             with col2:
-                st.metric("Sum of Returns", f"{filtered_stats['sum_returns']:.2f}%")
+                st.metric("Sum of Returns", f"{filtered_stats['sum_returns']:.2f}%",
+                         delta=f"{filtered_stats['sum_returns_count']} trades (size≥1000)")
 
             with col3:
                 st.metric("Win Rate", f"{filtered_stats['win_rate']:.1f}%",
@@ -1192,7 +1193,8 @@ def main():
                 st.metric("Avg Return Deviation", f"{summary['avg_return_deviation']:.3f}%")
 
             with col4:
-                st.metric("Avg Fill Latency", f"{summary['avg_fill_latency_seconds']:.1f}s")
+                st.metric("Avg Sentiment Offset", f"{summary['avg_sentiment_offset_seconds']:.1f}s",
+                         help="Average seconds into the minute when sentiment was recorded")
 
             # Significant deviations table
             st.subheader("⚠️ Significant Deviations")
@@ -1209,7 +1211,7 @@ def main():
 
                     # Create display dataframe
                     display_cols = [
-                        'match_key', 'Side', 'num_fills',
+                        'match_key', 'Side', 'num_fills', 'sentiment_offset_seconds',
                         'Entry_Price_bt', 'Entry_Price_live', 'entry_slippage_bps',
                         'Exit_Price_bt', 'Exit_Price_live', 'exit_slippage_bps',
                         'Return_Pct_bt', 'Return_Pct_live', 'return_deviation',
@@ -1217,7 +1219,7 @@ def main():
                     ]
                     display_df = significant[display_cols].copy()
                     display_df.columns = [
-                        'Timestamp', 'Side', 'Fills',
+                        'Timestamp', 'Side', 'Fills', 'Offset (s)',
                         'BT Entry', 'Live Entry', 'Entry Slip (bps)',
                         'BT Exit', 'Live Exit', 'Exit Slip (bps)',
                         'BT Return %', 'Live Return %', 'Return Δ %',
@@ -1225,6 +1227,7 @@ def main():
                     ]
 
                     # Format numeric columns
+                    display_df['Offset (s)'] = display_df['Offset (s)'].apply(lambda x: f"{x:.1f}")
                     display_df['BT Entry'] = display_df['BT Entry'].apply(lambda x: f"${x:.2f}")
                     display_df['Live Entry'] = display_df['Live Entry'].apply(lambda x: f"${x:.2f}")
                     display_df['BT Exit'] = display_df['BT Exit'].apply(lambda x: f"${x:.2f}")
