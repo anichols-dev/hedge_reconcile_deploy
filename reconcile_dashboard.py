@@ -677,14 +677,29 @@ def main():
     with tab3:
         st.header("Backtest Analysis")
 
-        # Add offset toggle
+        # Add offset toggle with cash simulation option
         offset_selection = st.radio(
             "Entry Offset",
-            ["0s Offset", "5s Offset"],
+            ["0s Offset", "5s Offset", "0s with Cash"],
             horizontal=True,
-            help="0s: Entry at sentiment timestamp | 5s: Entry 5 seconds after sentiment"
+            help="0s: Entry at sentiment timestamp | 5s: Entry 5 seconds after sentiment | 0s with Cash: Simulate compounding returns"
         )
-        offset = "0s" if offset_selection == "0s Offset" else "5s"
+
+        # Determine offset and cash simulation mode
+        simulate_cash = offset_selection == "0s with Cash"
+        offset = "0s" if offset_selection in ["0s Offset", "0s with Cash"] else "5s"
+
+        # Starting capital input (only show for cash simulation)
+        starting_capital = 100000.0  # Default
+        if simulate_cash:
+            starting_capital = st.number_input(
+                "Starting Capital ($)",
+                min_value=1000.0,
+                max_value=10000000.0,
+                value=100000.0,
+                step=10000.0,
+                help="Initial capital for compounding simulation"
+            )
 
         # Load backtest data
         try:
@@ -736,93 +751,195 @@ def main():
             # Overview metrics
             st.subheader("📊 Key Performance Metrics")
 
-            col1, col2, col3, col4 = st.columns(4)
+            if simulate_cash:
+                # Calculate compounding equity curve
+                sorted_bt = filtered_bt.sort_values('Entry_Time').copy()
+                equity = starting_capital
+                equity_values = []
+                for ret in sorted_bt['Return_Pct']:
+                    equity = equity * (1 + ret / 100)
+                    equity_values.append(equity)
+                sorted_bt['Equity'] = equity_values
 
-            with col1:
-                st.metric("Sum of Returns", f"{bt_stats['sum_returns']:.2f}%",
-                         delta=f"{bt_stats['total_trades']} trades")
+                final_equity = equity_values[-1] if equity_values else starting_capital
+                total_return_pct = (final_equity - starting_capital) / starting_capital * 100
+                total_pnl = final_equity - starting_capital
 
-            with col2:
-                st.metric("Win Rate", f"{bt_stats['win_rate']:.1f}%",
-                         delta=f"{bt_stats['wins']}/{bt_stats['total_trades']}")
+                col1, col2, col3, col4, col5 = st.columns(5)
 
-            with col3:
-                avg_hold_mins_bt = hold_stats_bt['avg_minutes']
-                if avg_hold_mins_bt < 60:
-                    st.metric("Avg Hold Time", f"{avg_hold_mins_bt:.1f} min")
-                else:
-                    st.metric("Avg Hold Time", f"{hold_stats_bt['avg_hours']:.1f} hrs")
+                with col1:
+                    st.metric("Starting Capital", f"${starting_capital:,.0f}")
 
-            with col4:
-                st.metric("Stop Loss %", f"{stop_loss_stats_bt['stop_loss_pct']:.1f}%",
-                         delta=f"{stop_loss_stats_bt['stop_loss_count']} trades")
+                with col2:
+                    st.metric("Final Equity", f"${final_equity:,.0f}",
+                             delta=f"{total_return_pct:+.2f}%")
 
-            # Cumulative Returns Chart
-            st.subheader("💰 Cumulative Returns Over Time")
+                with col3:
+                    st.metric("Total P&L", f"${total_pnl:,.0f}",
+                             delta=f"{bt_stats['total_trades']} trades")
 
-            # Sort by entry time and calculate cumulative returns
-            returns_df_bt = filtered_bt.sort_values('Entry_Time').copy()
-            returns_df_bt['Cumulative_Return'] = returns_df_bt['Return_Pct'].cumsum()
+                with col4:
+                    st.metric("Win Rate", f"{bt_stats['win_rate']:.1f}%",
+                             delta=f"{bt_stats['wins']}/{bt_stats['total_trades']}")
 
-            # Create cumulative returns line chart
-            fig_cumulative_bt = go.Figure()
+                with col5:
+                    st.metric("Stop Loss %", f"{stop_loss_stats_bt['stop_loss_pct']:.1f}%",
+                             delta=f"{stop_loss_stats_bt['stop_loss_count']} trades")
+            else:
+                col1, col2, col3, col4 = st.columns(4)
 
-            # Add cumulative returns line
-            fig_cumulative_bt.add_trace(go.Scatter(
-                x=returns_df_bt['Entry_Time'],
-                y=returns_df_bt['Cumulative_Return'],
-                mode='lines',
-                name='Cumulative Return',
-                line=dict(color='#1f77b4', width=2),
-                fill='tozeroy',
-                fillcolor='rgba(31, 119, 180, 0.2)',
-                hovertemplate='<b>%{x}</b><br>Cumulative Return: %{y:.2f}%<extra></extra>'
-            ))
+                with col1:
+                    st.metric("Sum of Returns", f"{bt_stats['sum_returns']:.2f}%",
+                             delta=f"{bt_stats['total_trades']} trades")
 
-            # Add individual trade markers colored by side
-            for side, color in [('Long', '#28a745'), ('Short', '#dc3545')]:
-                side_df_bt = returns_df_bt[returns_df_bt['Side'] == side]
+                with col2:
+                    st.metric("Win Rate", f"{bt_stats['win_rate']:.1f}%",
+                             delta=f"{bt_stats['wins']}/{bt_stats['total_trades']}")
+
+                with col3:
+                    avg_hold_mins_bt = hold_stats_bt['avg_minutes']
+                    if avg_hold_mins_bt < 60:
+                        st.metric("Avg Hold Time", f"{avg_hold_mins_bt:.1f} min")
+                    else:
+                        st.metric("Avg Hold Time", f"{hold_stats_bt['avg_hours']:.1f} hrs")
+
+                with col4:
+                    st.metric("Stop Loss %", f"{stop_loss_stats_bt['stop_loss_pct']:.1f}%",
+                             delta=f"{stop_loss_stats_bt['stop_loss_count']} trades")
+
+            # Cumulative Returns/Equity Chart
+            if simulate_cash:
+                st.subheader("💰 Equity Curve Over Time")
+
+                # Use the already-calculated sorted_bt with Equity column
+                returns_df_bt = sorted_bt.copy()
+
+                # Create equity curve chart
+                fig_cumulative_bt = go.Figure()
+
+                # Add equity line
                 fig_cumulative_bt.add_trace(go.Scatter(
-                    x=side_df_bt['Entry_Time'],
-                    y=side_df_bt['Cumulative_Return'],
-                    mode='markers',
-                    name=f'{side} Trades',
-                    marker=dict(
-                        color=color,
-                        size=6,
-                        line=dict(color='white', width=1)
-                    ),
-                    hovertemplate='<b>%{text}</b><br>' +
-                                  'Time: %{x}<br>' +
-                                  'Trade Return: %{customdata[0]:.2f}%<br>' +
-                                  'Cumulative: %{y:.2f}%<extra></extra>',
-                    text=[f'{side}' for _ in side_df_bt['Coin']],
-                    customdata=side_df_bt[['Return_Pct']].values
+                    x=returns_df_bt['Entry_Time'],
+                    y=returns_df_bt['Equity'],
+                    mode='lines',
+                    name='Equity',
+                    line=dict(color='#1f77b4', width=2),
+                    fill='tozeroy',
+                    fillcolor='rgba(31, 119, 180, 0.2)',
+                    hovertemplate='<b>%{x}</b><br>Equity: $%{y:,.0f}<extra></extra>'
                 ))
 
-            # Add zero line
-            fig_cumulative_bt.add_hline(
-                y=0,
-                line_dash="dash",
-                line_color="gray",
-                opacity=0.5
-            )
+                # Add individual trade markers colored by side
+                for side, color in [('Long', '#28a745'), ('Short', '#dc3545')]:
+                    side_df_bt = returns_df_bt[returns_df_bt['Side'] == side]
+                    fig_cumulative_bt.add_trace(go.Scatter(
+                        x=side_df_bt['Entry_Time'],
+                        y=side_df_bt['Equity'],
+                        mode='markers',
+                        name=f'{side} Trades',
+                        marker=dict(
+                            color=color,
+                            size=6,
+                            line=dict(color='white', width=1)
+                        ),
+                        hovertemplate='<b>%{text}</b><br>' +
+                                      'Time: %{x}<br>' +
+                                      'Trade Return: %{customdata[0]:.2f}%<br>' +
+                                      'Equity: $%{y:,.0f}<extra></extra>',
+                        text=[f'{side}' for _ in side_df_bt['Coin']],
+                        customdata=side_df_bt[['Return_Pct']].values
+                    ))
 
-            fig_cumulative_bt.update_layout(
-                title='Cumulative Return Performance',
-                xaxis_title='Entry Time',
-                yaxis_title='Cumulative Return (%)',
-                height=500,
-                hovermode='closest',
-                showlegend=True,
-                legend=dict(
-                    orientation="h",
-                    yanchor="bottom",
-                    y=1.02,
-                    xanchor="right",
-                    x=1
+                # Add starting capital reference line
+                fig_cumulative_bt.add_hline(
+                    y=starting_capital,
+                    line_dash="dash",
+                    line_color="gray",
+                    opacity=0.5,
+                    annotation_text=f"Starting: ${starting_capital:,.0f}"
                 )
-            )
+
+                fig_cumulative_bt.update_layout(
+                    title='Equity Curve (Compounding Returns)',
+                    xaxis_title='Entry Time',
+                    yaxis_title='Equity ($)',
+                    height=500,
+                    hovermode='closest',
+                    showlegend=True,
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=1.02,
+                        xanchor="right",
+                        x=1
+                    )
+                )
+            else:
+                st.subheader("💰 Cumulative Returns Over Time")
+
+                # Sort by entry time and calculate cumulative returns
+                returns_df_bt = filtered_bt.sort_values('Entry_Time').copy()
+                returns_df_bt['Cumulative_Return'] = returns_df_bt['Return_Pct'].cumsum()
+
+                # Create cumulative returns line chart
+                fig_cumulative_bt = go.Figure()
+
+                # Add cumulative returns line
+                fig_cumulative_bt.add_trace(go.Scatter(
+                    x=returns_df_bt['Entry_Time'],
+                    y=returns_df_bt['Cumulative_Return'],
+                    mode='lines',
+                    name='Cumulative Return',
+                    line=dict(color='#1f77b4', width=2),
+                    fill='tozeroy',
+                    fillcolor='rgba(31, 119, 180, 0.2)',
+                    hovertemplate='<b>%{x}</b><br>Cumulative Return: %{y:.2f}%<extra></extra>'
+                ))
+
+                # Add individual trade markers colored by side
+                for side, color in [('Long', '#28a745'), ('Short', '#dc3545')]:
+                    side_df_bt = returns_df_bt[returns_df_bt['Side'] == side]
+                    fig_cumulative_bt.add_trace(go.Scatter(
+                        x=side_df_bt['Entry_Time'],
+                        y=side_df_bt['Cumulative_Return'],
+                        mode='markers',
+                        name=f'{side} Trades',
+                        marker=dict(
+                            color=color,
+                            size=6,
+                            line=dict(color='white', width=1)
+                        ),
+                        hovertemplate='<b>%{text}</b><br>' +
+                                      'Time: %{x}<br>' +
+                                      'Trade Return: %{customdata[0]:.2f}%<br>' +
+                                      'Cumulative: %{y:.2f}%<extra></extra>',
+                        text=[f'{side}' for _ in side_df_bt['Coin']],
+                        customdata=side_df_bt[['Return_Pct']].values
+                    ))
+
+                # Add zero line
+                fig_cumulative_bt.add_hline(
+                    y=0,
+                    line_dash="dash",
+                    line_color="gray",
+                    opacity=0.5
+                )
+
+                fig_cumulative_bt.update_layout(
+                    title='Cumulative Return Performance',
+                    xaxis_title='Entry Time',
+                    yaxis_title='Cumulative Return (%)',
+                    height=500,
+                    hovermode='closest',
+                    showlegend=True,
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=1.02,
+                        xanchor="right",
+                        x=1
+                    )
+                )
 
             st.plotly_chart(fig_cumulative_bt, use_container_width=True)
 
