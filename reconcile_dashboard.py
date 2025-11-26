@@ -1184,10 +1184,16 @@ def main():
             col1, col2, col3, col4 = st.columns(4)
 
             with col1:
-                st.metric("Avg Entry Slippage", f"{summary['avg_entry_slippage_bps']:.1f} bps")
+                st.metric("Avg Entry Slip (raw)", f"{summary['avg_entry_slippage_bps']:.1f} bps",
+                         help="Raw: (Live - BT) / BT")
+                st.metric("Avg Entry Slip (adj)", f"{summary['avg_entry_slippage_adj_bps']:.1f} bps",
+                         help="Adjusted: positive = unfavorable for trader")
 
             with col2:
-                st.metric("Avg Exit Slippage", f"{summary['avg_exit_slippage_bps']:.1f} bps")
+                st.metric("Avg Exit Slip (raw)", f"{summary['avg_exit_slippage_bps']:.1f} bps",
+                         help="Raw: (Live - BT) / BT")
+                st.metric("Avg Exit Slip (adj)", f"{summary['avg_exit_slippage_adj_bps']:.1f} bps",
+                         help="Adjusted: positive = unfavorable for trader")
 
             with col3:
                 st.metric("Avg Return Deviation", f"{summary['avg_return_deviation']:.3f}%")
@@ -1208,37 +1214,177 @@ def main():
 
                 if len(significant) > 0:
                     st.write(f"**Found {len(significant)} trades with significant deviations**")
+                    st.caption("Check 'Exclude' to remove trades from summary calculations")
 
-                    # Create display dataframe
+                    # Create display dataframe with adjusted slippage columns
                     display_cols = [
                         'match_key', 'Side', 'num_fills', 'sentiment_offset_seconds',
-                        'Entry_Price_bt', 'Entry_Price_live', 'entry_slippage_bps',
-                        'Exit_Price_bt', 'Exit_Price_live', 'exit_slippage_bps',
+                        'Entry_Price_bt', 'Entry_Price_live', 'entry_slippage_bps', 'entry_slippage_adj_bps',
+                        'Exit_Time_bt', 'Exit_Time_live', 'exit_time_diff_seconds',
+                        'Exit_Price_bt', 'Exit_Price_live', 'exit_slippage_bps', 'exit_slippage_adj_bps',
                         'Return_Pct_bt', 'Return_Pct_live', 'return_deviation',
                         'Exit_Reason_bt', 'Exit_Reason_live', 'exit_reason_mismatch'
                     ]
                     display_df = significant[display_cols].copy()
+
+                    # Add exclude column at the start
+                    display_df.insert(0, 'Exclude', False)
+
                     display_df.columns = [
-                        'Timestamp', 'Side', 'Fills', 'Offset (s)',
-                        'BT Entry', 'Live Entry', 'Entry Slip (bps)',
-                        'BT Exit', 'Live Exit', 'Exit Slip (bps)',
+                        'Exclude', 'Timestamp', 'Side', 'Fills', 'Offset (s)',
+                        'BT Entry $', 'Live Entry $', 'Entry Slip (bps)', 'Entry Slip Adj (bps)',
+                        'BT Exit Time', 'Live Exit Time', 'Exit Time Δ (s)',
+                        'BT Exit $', 'Live Exit $', 'Exit Slip (bps)', 'Exit Slip Adj (bps)',
                         'BT Return %', 'Live Return %', 'Return Δ %',
                         'BT Exit Reason', 'Live Exit Reason', 'Mismatch'
                     ]
 
-                    # Format numeric columns
-                    display_df['Offset (s)'] = display_df['Offset (s)'].apply(lambda x: f"{x:.1f}")
-                    display_df['BT Entry'] = display_df['BT Entry'].apply(lambda x: f"${x:.2f}")
-                    display_df['Live Entry'] = display_df['Live Entry'].apply(lambda x: f"${x:.2f}")
-                    display_df['BT Exit'] = display_df['BT Exit'].apply(lambda x: f"${x:.2f}")
-                    display_df['Live Exit'] = display_df['Live Exit'].apply(lambda x: f"${x:.2f}")
-                    display_df['Entry Slip (bps)'] = display_df['Entry Slip (bps)'].apply(lambda x: f"{x:.1f}")
-                    display_df['Exit Slip (bps)'] = display_df['Exit Slip (bps)'].apply(lambda x: f"{x:.1f}")
-                    display_df['BT Return %'] = display_df['BT Return %'].apply(lambda x: f"{x:.3f}")
-                    display_df['Live Return %'] = display_df['Live Return %'].apply(lambda x: f"{x:.3f}")
-                    display_df['Return Δ %'] = display_df['Return Δ %'].apply(lambda x: f"{x:.3f}")
+                    # Reset index so we can map back to match_keys correctly
+                    display_df = display_df.reset_index(drop=True)
 
-                    st.dataframe(display_df, use_container_width=True)
+                    # Store original match_keys for filtering (aligned with reset index)
+                    original_match_keys = significant['match_key'].reset_index(drop=True).tolist()
+
+                    # Create CSV export dataframe (unformatted for precision)
+                    csv_cols = display_cols.copy()
+                    csv_df = significant[csv_cols].copy()
+                    csv_df.columns = [
+                        'Timestamp', 'Side', 'Fills', 'Offset (s)',
+                        'BT Entry $', 'Live Entry $', 'Entry Slip (bps)', 'Entry Slip Adj (bps)',
+                        'BT Exit Time', 'Live Exit Time', 'Exit Time Δ (s)',
+                        'BT Exit $', 'Live Exit $', 'Exit Slip (bps)', 'Exit Slip Adj (bps)',
+                        'BT Return %', 'Live Return %', 'Return Δ %',
+                        'BT Exit Reason', 'Live Exit Reason', 'Mismatch'
+                    ]
+
+                    # Use data_editor for interactive checkboxes
+                    edited_df = st.data_editor(
+                        display_df,
+                        column_config={
+                            "Exclude": st.column_config.CheckboxColumn(
+                                "Exclude",
+                                help="Check to exclude from summary calculations",
+                                default=False,
+                            ),
+                            "Timestamp": st.column_config.DatetimeColumn(
+                                "Timestamp",
+                                format="YYYY-MM-DD HH:mm",
+                            ),
+                            "BT Exit Time": st.column_config.DatetimeColumn(
+                                "BT Exit Time",
+                                format="YYYY-MM-DD HH:mm:ss",
+                            ),
+                            "Live Exit Time": st.column_config.DatetimeColumn(
+                                "Live Exit Time",
+                                format="YYYY-MM-DD HH:mm:ss",
+                            ),
+                            "BT Entry $": st.column_config.NumberColumn(
+                                "BT Entry $",
+                                format="$%.2f",
+                            ),
+                            "Live Entry $": st.column_config.NumberColumn(
+                                "Live Entry $",
+                                format="$%.2f",
+                            ),
+                            "BT Exit $": st.column_config.NumberColumn(
+                                "BT Exit $",
+                                format="$%.2f",
+                            ),
+                            "Live Exit $": st.column_config.NumberColumn(
+                                "Live Exit $",
+                                format="$%.2f",
+                            ),
+                            "Entry Slip (bps)": st.column_config.NumberColumn(
+                                "Entry Slip (bps)",
+                                format="%.1f",
+                            ),
+                            "Entry Slip Adj (bps)": st.column_config.NumberColumn(
+                                "Entry Slip Adj (bps)",
+                                format="%.1f",
+                                help="Adjusted: positive = unfavorable",
+                            ),
+                            "Exit Slip (bps)": st.column_config.NumberColumn(
+                                "Exit Slip (bps)",
+                                format="%.1f",
+                            ),
+                            "Exit Slip Adj (bps)": st.column_config.NumberColumn(
+                                "Exit Slip Adj (bps)",
+                                format="%.1f",
+                                help="Adjusted: positive = unfavorable",
+                            ),
+                            "BT Return %": st.column_config.NumberColumn(
+                                "BT Return %",
+                                format="%.3f",
+                            ),
+                            "Live Return %": st.column_config.NumberColumn(
+                                "Live Return %",
+                                format="%.3f",
+                            ),
+                            "Return Δ %": st.column_config.NumberColumn(
+                                "Return Δ %",
+                                format="%.3f",
+                            ),
+                            "Offset (s)": st.column_config.NumberColumn(
+                                "Offset (s)",
+                                format="%.1f",
+                            ),
+                            "Exit Time Δ (s)": st.column_config.NumberColumn(
+                                "Exit Time Δ (s)",
+                                format="%.0f",
+                            ),
+                        },
+                        disabled=[col for col in display_df.columns if col != 'Exclude'],
+                        hide_index=True,
+                        use_container_width=True,
+                        key="significant_deviations_editor"
+                    )
+
+                    # Check if any rows are excluded
+                    # Convert to boolean explicitly in case st.data_editor returns different types
+                    exclude_mask = edited_df['Exclude'].astype(bool)
+                    excluded_count = exclude_mask.sum()
+
+                    if excluded_count > 0:
+                        st.info(f"Excluding {excluded_count} trades from summary calculations")
+
+                        # Get the match_keys of excluded rows using boolean mask
+                        excluded_indices = exclude_mask[exclude_mask].index.tolist()
+                        excluded_match_keys = [original_match_keys[i] for i in excluded_indices]
+
+                        # Filter matched_df to exclude those trades
+                        included_matched = filtered_matched[~filtered_matched['match_key'].isin(excluded_match_keys)]
+
+                        # Recalculate summary with excluded rows removed
+                        adjusted_summary = ra.get_reconciliation_summary(included_matched, live_only_df, backtest_only_df)
+
+                        # Display adjusted metrics
+                        st.subheader("📈 Adjusted Metrics (excluding selected trades)")
+
+                        col1, col2, col3, col4 = st.columns(4)
+
+                        with col1:
+                            st.metric("Adj Entry Slip (raw)", f"{adjusted_summary['avg_entry_slippage_bps']:.1f} bps")
+                            st.metric("Adj Entry Slip (adj)", f"{adjusted_summary['avg_entry_slippage_adj_bps']:.1f} bps")
+
+                        with col2:
+                            st.metric("Adj Exit Slip (raw)", f"{adjusted_summary['avg_exit_slippage_bps']:.1f} bps")
+                            st.metric("Adj Exit Slip (adj)", f"{adjusted_summary['avg_exit_slippage_adj_bps']:.1f} bps")
+
+                        with col3:
+                            st.metric("Adj Return Deviation", f"{adjusted_summary['avg_return_deviation']:.3f}%")
+
+                        with col4:
+                            st.metric("Included Trades", f"{adjusted_summary['total_matched']:,}")
+
+                    # CSV download button
+                    csv_data = csv_df.to_csv(index=False)
+                    st.download_button(
+                        label="📥 Download Deviations CSV",
+                        data=csv_data,
+                        file_name="significant_deviations.csv",
+                        mime="text/csv",
+                        help="Download the significant deviations table as CSV"
+                    )
                 else:
                     st.success("No significant deviations found with current thresholds")
             else:
@@ -1377,7 +1523,9 @@ def main():
                             'Side': side,
                             'Trades': len(side_df),
                             'Avg Entry Slip (bps)': f"{side_df['entry_slippage_bps'].mean():.1f}",
+                            'Avg Entry Slip Adj (bps)': f"{side_df['entry_slippage_adj_bps'].mean():.1f}",
                             'Avg Exit Slip (bps)': f"{side_df['exit_slippage_bps'].mean():.1f}",
+                            'Avg Exit Slip Adj (bps)': f"{side_df['exit_slippage_adj_bps'].mean():.1f}",
                             'Avg Return Dev %': f"{side_df['return_deviation'].mean():.3f}",
                             'Exit Mismatches': side_df['exit_reason_mismatch'].sum(),
                             'Mismatch %': f"{(side_df['exit_reason_mismatch'].sum() / len(side_df) * 100):.1f}"

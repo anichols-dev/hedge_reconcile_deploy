@@ -665,8 +665,25 @@ def calculate_deviations(matched_df):
     # the minute the sentiment was recorded in backtest)
     df['sentiment_offset_seconds'] = df['Entry_Time_bt'].dt.second + df['Entry_Time_bt'].dt.microsecond / 1_000_000
 
+    # Exit time difference in seconds (live - backtest)
+    # Need to handle timezone differences
+    exit_time_live = df['Exit_Time_live']
+    exit_time_bt = df['Exit_Time_bt'].dt.tz_localize(None) if df['Exit_Time_bt'].dt.tz is not None else df['Exit_Time_bt']
+    df['exit_time_diff_seconds'] = (exit_time_live - exit_time_bt).dt.total_seconds()
+
     # Absolute return deviation for sorting
     df['abs_return_deviation'] = df['return_deviation'].abs()
+
+    # Direction-adjusted slippage (positive = unfavorable for trader)
+    # Long entry: paying more = bad, Short entry: selling lower = bad
+    # Long exit: selling lower = bad, Short exit: buying higher = bad
+    direction = np.where(df['Side'] == 'Long', 1, -1)
+
+    df['entry_slippage_adj_pct'] = direction * df['entry_slippage_pct']
+    df['entry_slippage_adj_bps'] = df['entry_slippage_adj_pct'] * 100
+
+    df['exit_slippage_adj_pct'] = -direction * df['exit_slippage_pct']
+    df['exit_slippage_adj_bps'] = df['exit_slippage_adj_pct'] * 100
 
     return df
 
@@ -698,6 +715,8 @@ def get_reconciliation_summary(matched_df, live_only_df, backtest_only_df):
         summary.update({
             'avg_entry_slippage_bps': matched_df['entry_slippage_bps'].mean(),
             'avg_exit_slippage_bps': matched_df['exit_slippage_bps'].mean(),
+            'avg_entry_slippage_adj_bps': matched_df['entry_slippage_adj_bps'].mean(),
+            'avg_exit_slippage_adj_bps': matched_df['exit_slippage_adj_bps'].mean(),
             'avg_return_deviation': matched_df['return_deviation'].mean(),
             'median_return_deviation': matched_df['return_deviation'].median(),
             'exit_reason_mismatch_count': matched_df['exit_reason_mismatch'].sum(),
@@ -708,6 +727,8 @@ def get_reconciliation_summary(matched_df, live_only_df, backtest_only_df):
         summary.update({
             'avg_entry_slippage_bps': 0,
             'avg_exit_slippage_bps': 0,
+            'avg_entry_slippage_adj_bps': 0,
+            'avg_exit_slippage_adj_bps': 0,
             'avg_return_deviation': 0,
             'median_return_deviation': 0,
             'exit_reason_mismatch_count': 0,
